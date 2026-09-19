@@ -1,100 +1,222 @@
+import os
+
+from dotenv import load_dotenv
+
 from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import create_engine, String
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, Session
+
 from pwdlib import PasswordHash
 
+from sqlalchemy import String, create_engine, select, text
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
-app = FastAPI()
+
+# =========================================================
+# ENVIRONMENT
+# =========================================================
+
+load_dotenv()
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL is not configured")
 
 
-# -------------------------
-# DATABASE
-# -------------------------
+# =========================================================
+# FASTAPI
+# =========================================================
 
-DATABASE_URL = "sqlite:///./database.db"
-
-engine = create_engine(
-    DATABASE_URL,
-    connect_args={"check_same_thread": False}
+app = FastAPI(
+    title="FastAPI Authentication System"
 )
 
+
+# =========================================================
+# DATABASE
+# =========================================================
+
+engine = create_engine(DATABASE_URL)
+
+
+# =========================================================
+# DATABASE BASE CLASS
+# =========================================================
 
 class Base(DeclarativeBase):
     pass
 
 
-# -------------------------
-# USER / MEMBER TABLE
-# -------------------------
+# =========================================================
+# MEMBER DATABASE MODEL
+# =========================================================
 
 class Member(Base):
     __tablename__ = "members"
 
-    id: Mapped[int] = mapped_column(primary_key=True)
+    id: Mapped[int] = mapped_column(
+        primary_key=True
+    )
+
     username: Mapped[str] = mapped_column(
         String(50),
         unique=True,
         index=True
     )
-    password_hash: Mapped[str] = mapped_column(String)
+
+    password_hash: Mapped[str] = mapped_column(
+        String(255)
+    )
 
 
-# Create the table
+# =========================================================
+# CREATE TABLES
+# =========================================================
+
 Base.metadata.create_all(engine)
 
 
-# -------------------------
+# =========================================================
 # PASSWORD HASHING
-# -------------------------
+# =========================================================
 
 password_hash = PasswordHash.recommended()
 
 
-# -------------------------
+# =========================================================
 # REQUEST SCHEMA
-# -------------------------
+# =========================================================
 
 class RegisterRequest(BaseModel):
     username: str
     password: str
 
 
-# -------------------------
-# REGISTER MEMBER
-# -------------------------
+class LoginRequest(BaseModel):
+    username: str
+    password: str    
 
-@app.post("/auth/register", status_code=status.HTTP_201_CREATED)
+
+# =========================================================
+# DATABASE CONNECTION TEST
+# =========================================================
+
+with engine.connect() as connection:
+    result = connection.execute(text("SELECT 1"))
+    print("Database connection:", result.scalar())
+
+
+# =========================================================
+# BASIC ROUTES
+# =========================================================
+
+@app.get("/")
+def home():
+    return {
+        "message": "FastAPI Authentication System"
+    }
+
+
+@app.get("/about")
+def about():
+    return {
+        "message": "Welcome to the About Page!"
+    }
+
+
+# =========================================================
+# REGISTER MEMBER
+# =========================================================
+
+@app.post(
+    "/auth/register",
+    status_code=status.HTTP_201_CREATED
+)
 def register_member(data: RegisterRequest):
 
     with Session(engine) as session:
 
-        # Check whether username already exists
-        existing_member = session.query(Member).filter(
+        # 1. Look for an existing username
+        statement = select(Member).where(
             Member.username == data.username
-        ).first()
+        )
+
+        existing_member = session.scalar(statement)
 
         if existing_member:
             raise HTTPException(
-                status_code=409,
+                status_code=status.HTTP_409_CONFLICT,
                 detail="Username already exists"
             )
 
-        # Hash the password
-        hashed_password = password_hash.hash(data.password)
+        # 2. Hash the password
+        hashed_password = password_hash.hash(
+            data.password
+        )
 
-        # Create member
+        # 3. Create a Member object
         member = Member(
             username=data.username,
             password_hash=hashed_password
         )
 
-        # Save to database
+        # 4. Add the member to the session
         session.add(member)
+
+        # 5. Commit the transaction
         session.commit()
+
+        # 6. Refresh the object
         session.refresh(member)
 
         return {
             "message": "Member registered successfully",
+            "username": member.username
+        }
+
+
+
+def verify_password(
+    plain_password: str,
+    hashed_password: str
+) -> bool:
+    return password_hash.verify(
+        plain_password,
+        hashed_password
+    )
+
+
+@app.post("/auth/login")
+def login_member(data: LoginRequest):
+
+    with Session(engine) as session:
+
+        # 1. Find the member by username
+        statement = select(Member).where(
+            Member.username == data.username
+        )
+
+        member = session.scalar(statement)
+
+        # 2. Make sure the member exists
+        if not member:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid username or password"
+            )
+
+        # 3. Verify the submitted password
+        if not verify_password(
+            data.password,
+            member.password_hash
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid username or password"
+            )
+
+        # 4. Authentication succeeded
+        return {
+            "message": "Login successful",
             "username": member.username
         }
