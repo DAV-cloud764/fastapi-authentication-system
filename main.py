@@ -10,6 +10,9 @@ from pwdlib import PasswordHash
 from sqlalchemy import String, create_engine, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
+from datetime import datetime, timedelta, timezone
+import jwt
+
 
 # =========================================================
 # ENVIRONMENT
@@ -106,6 +109,16 @@ with engine.connect() as connection:
     print("Database connection:", result.scalar())
 
 
+SECRET_KEY = os.getenv("SECRET_KEY")
+ALGORITHM = os.getenv("ALGORITHM", "HS256")
+ACCESS_TOKEN_EXPIRE_MINUTES = int(
+    os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30")
+)
+
+if not SECRET_KEY:
+    raise RuntimeError("SECRET_KEY is not configured")    
+
+
 # =========================================================
 # BASIC ROUTES
 # =========================================================
@@ -185,6 +198,33 @@ def verify_password(
         hashed_password
     )
 
+def create_access_token(
+    member_id: int,
+    expires_delta: timedelta | None = None
+) -> str:
+
+    if expires_delta is None:
+        expires_delta = timedelta(
+            minutes=ACCESS_TOKEN_EXPIRE_MINUTES
+        )
+
+    expire = datetime.now(timezone.utc) + expires_delta
+
+    payload = {
+        "sub": str(member_id),
+        "exp": expire
+    }
+
+    return jwt.encode(
+        payload,
+        SECRET_KEY,
+        algorithm=ALGORITHM
+    )
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+
 
 @app.post("/auth/login")
 def login_member(data: LoginRequest):
@@ -216,7 +256,11 @@ def login_member(data: LoginRequest):
             )
 
         # 4. Authentication succeeded
-        return {
-            "message": "Login successful",
-            "username": member.username
-        }
+        access_token = create_access_token(
+    member_id=member.id
+)
+
+    return Token(
+    access_token=access_token,
+    token_type="bearer"
+)
