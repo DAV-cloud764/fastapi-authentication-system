@@ -13,6 +13,12 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 from datetime import datetime, timedelta, timezone
 import jwt
 
+from typing import Annotated
+
+from fastapi import Depends
+from fastapi.security import OAuth2PasswordBearer
+from jwt.exceptions import InvalidTokenError
+
 
 # =========================================================
 # ENVIRONMENT
@@ -48,6 +54,14 @@ engine = create_engine(DATABASE_URL)
 
 class Base(DeclarativeBase):
     pass
+
+# =========================================================
+# OAUTH2 SCHEME
+# =========================================================
+
+oauth2_scheme = OAuth2PasswordBearer(
+    tokenUrl="auth/login"
+)
 
 
 # =========================================================
@@ -224,6 +238,62 @@ def create_access_token(
 class Token(BaseModel):
     access_token: str
     token_type: str
+
+
+def get_current_member(
+    token: Annotated[str, Depends(oauth2_scheme)]
+):
+    try:
+        payload = jwt.decode(
+            token,
+            SECRET_KEY,
+            algorithms=[ALGORITHM]
+        )
+
+    except InvalidTokenError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+
+    member_id = payload.get("sub")
+
+    if member_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+
+    with Session(engine) as session:
+
+        member = session.get(
+            Member,
+            int(member_id)
+        )
+
+        if member is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Member not found",
+                headers={"WWW-Authenticate": "Bearer"}
+            )
+
+        return member
+
+
+@app.get("/members/me")
+def get_my_profile(
+    current_member: Annotated[
+        Member,
+        Depends(get_current_member)
+    ]
+):
+    return {
+        "id": current_member.id,
+        "username": current_member.username
+    }        
 
 
 @app.post("/auth/login")
