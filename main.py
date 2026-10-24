@@ -85,6 +85,13 @@ class Member(Base):
         String(255)
     )
 
+    role: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="member",
+        server_default=text("'member'")
+    )
+
 
 # =========================================================
 # CREATE TABLES
@@ -111,7 +118,7 @@ class RegisterRequest(BaseModel):
 
 class LoginRequest(BaseModel):
     username: str
-    password: str    
+    password: str
 
 
 # =========================================================
@@ -130,7 +137,7 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(
 )
 
 if not SECRET_KEY:
-    raise RuntimeError("SECRET_KEY is not configured")    
+    raise RuntimeError("SECRET_KEY is not configured")
 
 
 # =========================================================
@@ -292,8 +299,9 @@ def get_my_profile(
 ):
     return {
         "id": current_member.id,
-        "username": current_member.username
-    }        
+        "username": current_member.username,
+        "role": current_member.role
+    }
 
 
 @app.post("/auth/login")
